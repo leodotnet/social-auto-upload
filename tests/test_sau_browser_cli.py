@@ -107,6 +107,40 @@ class BrowserCliParserTests(unittest.TestCase):
 
         self.assertFalse(args.headless)
 
+    def test_tiktok_login_parser(self):
+        parser = sau_cli.build_parser()
+        args = parser.parse_args(["tiktok", "login", "--account", "sgreport"])
+        self.assertEqual(args.platform, "tiktok")
+        self.assertEqual(args.action, "login")
+        self.assertEqual(args.account, "sgreport")
+
+    def test_tiktok_upload_video_parser(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            video_path = Path(tmp_dir) / "demo.mp4"
+            video_path.write_bytes(b"video")
+            parser = sau_cli.build_parser()
+            args = parser.parse_args(
+                [
+                    "tiktok",
+                    "upload-video",
+                    "--account",
+                    "sgreport",
+                    "--file",
+                    str(video_path),
+                    "--title",
+                    "标题",
+                    "--desc",
+                    "简介一行",
+                    "--tags",
+                    "a,b",
+                ]
+            )
+        self.assertEqual(args.platform, "tiktok")
+        self.assertEqual(args.action, "upload-video")
+        self.assertEqual(args.title, "标题")
+        self.assertEqual(args.desc, "简介一行")
+        self.assertEqual(args.tags, "a,b")
+
 
 class BrowserCliDispatchTests(unittest.TestCase):
     def test_dispatch_xiaohongshu_check_prints_valid(self):
@@ -178,6 +212,47 @@ class BrowserCliDispatchTests(unittest.TestCase):
         self.assertEqual(request.note, "图文正文")
         self.assertTrue(request.headless)
         self.assertEqual(len(request.image_files), 2)
+
+    def test_dispatch_tiktok_check_prints_valid(self):
+        args = Namespace(platform="tiktok", action="check", account="sgreport")
+        with patch("sau_cli.check_tiktok_account", new=AsyncMock(return_value=True)):
+            code = asyncio.run(sau_cli.dispatch(args))
+        self.assertEqual(code, 0)
+
+    def test_dispatch_tiktok_check_invalid_exit_code(self):
+        args = Namespace(platform="tiktok", action="check", account="sgreport")
+        with patch("sau_cli.check_tiktok_account", new=AsyncMock(return_value=False)):
+            code = asyncio.run(sau_cli.dispatch(args))
+        self.assertEqual(code, 1)
+
+    def test_dispatch_tiktok_login_calls_helper(self):
+        args = Namespace(platform="tiktok", action="login", account="sgreport")
+        with patch("sau_cli.login_tiktok_account", new=AsyncMock()) as mock_login:
+            code = asyncio.run(sau_cli.dispatch(args))
+        self.assertEqual(code, 0)
+        mock_login.assert_awaited_once_with("sgreport")
+
+    def test_dispatch_tiktok_upload_video_merges_title_desc(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            video_path = Path(tmp_dir) / "demo.mp4"
+            video_path.write_bytes(b"video")
+            args = Namespace(
+                platform="tiktok",
+                action="upload-video",
+                account="sgreport",
+                file=video_path,
+                title="标题",
+                desc="第二段",
+                tags="x,y",
+                schedule=0,
+                thumbnail=None,
+            )
+            with patch("sau_cli.upload_tiktok_video", new=AsyncMock()) as mock_upload:
+                asyncio.run(sau_cli.dispatch(args))
+            request = mock_upload.await_args.args[0]
+            self.assertEqual(request.title, "标题")
+            self.assertEqual(request.description, "第二段")
+            self.assertEqual(request.tags, ["x", "y"])
 
 
 if __name__ == "__main__":

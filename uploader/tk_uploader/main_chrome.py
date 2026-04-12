@@ -3,8 +3,9 @@ import re
 from datetime import datetime
 
 from playwright.async_api import Playwright, async_playwright
-import os
 import asyncio
+import os
+import sys
 
 from conf import LOCAL_CHROME_PATH, LOCAL_CHROME_HEADLESS
 from uploader.tk_uploader.tk_config import Tk_Locator
@@ -12,31 +13,44 @@ from utils.base_social_media import set_init_script
 from utils.files_times import get_absolute_path
 from utils.log import tiktok_logger
 
+_NAV_TIMEOUT_MS = 120_000
+# TikTok Studio 会持续请求，几乎等不到 networkidle；用 domcontentloaded + 短等待即可做登录态探测
+
+
+def _launch_chromium(playwright, *, headless: bool):
+    path = (LOCAL_CHROME_PATH or "").strip()
+    if path:
+        return playwright.chromium.launch(headless=headless, executable_path=path)
+    return playwright.chromium.launch(headless=headless)
+
 
 async def cookie_auth(account_file):
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=LOCAL_CHROME_HEADLESS)
-        context = await browser.new_context(storage_state=account_file)
-        context = await set_init_script(context)
-        # 创建一个新的页面
-        page = await context.new_page()
-        # 访问指定的 URL
-        await page.goto("https://www.tiktok.com/tiktokstudio/upload?lang=en")
-        await page.wait_for_load_state('networkidle')
+        browser = await _launch_chromium(playwright, headless=LOCAL_CHROME_HEADLESS)
         try:
-            # 选择所有的 select 元素
-            select_elements = await page.query_selector_all('select')
-            for element in select_elements:
-                class_name = await element.get_attribute('class')
-                # 使用正则表达式匹配特定模式的 class 名称
-                if re.match(r'tiktok-.*-SelectFormContainer.*', class_name):
-                    tiktok_logger.error("[+] cookie expired")
-                    return False
-            tiktok_logger.success("[+] cookie valid")
-            return True
-        except:
-            tiktok_logger.success("[+] cookie valid")
-            return True
+            context = await browser.new_context(storage_state=account_file)
+            context = await set_init_script(context)
+            page = await context.new_page()
+            await page.goto(
+                "https://www.tiktok.com/tiktokstudio/upload?lang=en",
+                wait_until="domcontentloaded",
+                timeout=_NAV_TIMEOUT_MS,
+            )
+            await page.wait_for_timeout(3000)
+            try:
+                select_elements = await page.query_selector_all("select")
+                for element in select_elements:
+                    class_name = await element.get_attribute("class")
+                    if class_name and re.match(r"tiktok-.*-SelectFormContainer.*", class_name):
+                        tiktok_logger.error("[+] cookie expired")
+                        return False
+                tiktok_logger.success("[+] cookie valid")
+                return True
+            except Exception:
+                tiktok_logger.success("[+] cookie valid")
+                return True
+        finally:
+            await browser.close()
 
 
 async def tiktok_setup(account_file, handle=False):
@@ -51,23 +65,42 @@ async def tiktok_setup(account_file, handle=False):
 
 async def get_tiktok_cookie(account_file):
     async with async_playwright() as playwright:
-        options = {
-            'args': [
-                '--lang en-GB',
-            ],
-            'headless': LOCAL_CHROME_HEADLESS,  # Set headless option here
-        }
-        # Make sure to run headed.
-        browser = await playwright.chromium.launch(**options)
-        # Setup context however you like.
-        context = await browser.new_context()  # Pass any options
-        context = await set_init_script(context)
-        # Pause the page, and start recording manually.
-        page = await context.new_page()
-        await page.goto("https://www.tiktok.com/login?lang=en")
-        await page.pause()
-        # 点击调试器的继续，保存cookie
-        await context.storage_state(path=account_file)
+        browser = await _launch_chromium(
+            playwright,
+            headless=LOCAL_CHROME_HEADLESS,
+        )
+        try:
+            context = await browser.new_context(
+                locale="en-GB",
+                extra_http_headers={"Accept-Language": "en-GB,en;q=0.9"},
+            )
+            context = await set_init_script(context)
+            page = await context.new_page()
+            try:
+                await page.goto(
+                    "https://www.tiktok.com/login?lang=en",
+                    wait_until="domcontentloaded",
+                    timeout=_NAV_TIMEOUT_MS,
+                )
+            except Exception as exc:
+                tiktok_logger.warning(
+                    f"打开登录页超时或中断（{exc!s}）。若浏览器里已能操作，可直接登录后在终端按回车保存 cookie。"
+                )
+            if sys.stdin.isatty():
+                tiktok_logger.info(
+                    "已在浏览器中打开登录页。请在窗口中完成登录（或确认已登录），"
+                    "然后回到此终端按回车，将保存 cookie 并关闭浏览器。"
+                )
+                await asyncio.to_thread(input, "登录完成后按 Enter 保存 cookie … ")
+            else:
+                tiktok_logger.warning(
+                    "非交互式终端无法按回车保存；已改用 Playwright 暂停，请在 Inspector 中点击 Resume。"
+                )
+                await page.pause()
+            os.makedirs(os.path.dirname(account_file) or ".", exist_ok=True)
+            await context.storage_state(path=account_file)
+        finally:
+            await browser.close()
 
 
 class TiktokVideo(object):
@@ -155,15 +188,22 @@ class TiktokVideo(object):
         # change language to eng first
         await self.change_language(page)
         await page.goto("https://www.tiktok.com/tiktokstudio/upload")
-        tiktok_logger.info(f'[+]Uploading-------{self.title}.mp4')
+        tiktok_logger.info(f"[+] Uploading video (title length {len(self.title)} chars)")
 
         await page.wait_for_url("https://www.tiktok.com/tiktokstudio/upload", timeout=10000)
 
+        # 页面可能是 iframe、旧版 upload-container，或仅渲染「Select video」；任一出现即视为可继续
         try:
-            await page.wait_for_selector('iframe[data-tt="Upload_index_iframe"], div.upload-container', timeout=10000)
-            tiktok_logger.info("Either iframe or div appeared.")
-        except Exception as e:
-            tiktok_logger.error("Neither iframe nor div appeared within the timeout.")
+            await page.wait_for_selector(
+                'iframe[data-tt="Upload_index_iframe"], div.upload-container, '
+                'button:has-text("Select video")',
+                timeout=30000,
+            )
+            tiktok_logger.info("  [-] Upload UI ready (iframe, upload container, or Select video).")
+        except Exception:
+            tiktok_logger.warning(
+                "  [-] Upload shell selectors not seen within 30s; continuing in case UI is slow or DOM changed."
+            )
 
         await self.choose_base_locator(page)
 
@@ -176,6 +216,8 @@ class TiktokVideo(object):
         file_chooser = await fc_info.value
         await file_chooser.set_files(self.file_path)
 
+        await page.wait_for_timeout(2000)
+        await self._dismiss_studio_popups(page)
         await self.add_title_tags(page)
         # detect upload status
         await self.detect_upload_status(page)
@@ -196,10 +238,111 @@ class TiktokVideo(object):
         await context.close()
         await browser.close()
 
-    async def add_title_tags(self, page):
+    async def _dismiss_studio_popups(self, page) -> None:
+        """Close onboarding (react-joyride), TUX modals and floating hints that block the caption editor."""
+        tiktok_logger.info("  [-] Dismissing TikTok Studio overlays (tour / modals / tooltips)…")
+        for _ in range(4):
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(200)
 
-        editor_locator = self.locator_base.locator('div.public-DraftEditor-content')
-        await editor_locator.click()
+        for label in (
+            "Got it",
+            "OK",
+            "Continue",
+            "Skip",
+            "Dismiss",
+            "I understand",
+            "Not now",
+            "Maybe later",
+            "Allow",
+            "Next",
+        ):
+            try:
+                btn = page.get_by_role("button", name=re.compile(rf"^{re.escape(label)}$", re.I))
+                if await btn.count():
+                    await btn.first.click(timeout=2500)
+                    await page.wait_for_timeout(400)
+            except Exception:
+                pass
+
+        try:
+            await page.evaluate(
+                """() => {
+                    document.getElementById('react-joyride-portal')?.remove();
+                    document.querySelectorAll('.react-joyride__overlay').forEach((e) => e.remove());
+                }"""
+            )
+        except Exception:
+            pass
+
+        for _ in range(2):
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(200)
+
+    async def _dismiss_publish_blockers(self, page) -> None:
+        """Dismiss TUX dialogs that cover the Post / Post Now button (floating-ui portal)."""
+        for _ in range(3):
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(150)
+
+        overlay = page.locator('div.TUXModal-overlay[data-transition-status="open"]')
+        if await overlay.count():
+            for pattern in (
+                r"Post Now",
+                r"^Post$",
+                r"Publish",
+                r"OK",
+                r"Got it",
+                r"Continue",
+                r"Confirm",
+            ):
+                try:
+                    btn = overlay.get_by_role("button", name=re.compile(pattern, re.I))
+                    if await btn.count():
+                        await btn.first.click(timeout=4000)
+                        await page.wait_for_timeout(500)
+                        return
+                except Exception:
+                    pass
+            try:
+                primary = overlay.locator("button.Button__root--type-primary").first
+                if await primary.count():
+                    await primary.click(timeout=4000)
+                    await page.wait_for_timeout(500)
+            except Exception:
+                pass
+
+    async def _neutralize_open_tux_overlays(self, page) -> None:
+        """Last resort: let clicks reach the Post button (does not remove DOM, only pointer-events)."""
+        try:
+            await page.evaluate(
+                """() => {
+                    document.querySelectorAll(
+                        'div.TUXModal-overlay[data-transition-status="open"]'
+                    ).forEach((el) => {
+                        el.style.setProperty('pointer-events', 'none');
+                    });
+                }"""
+            )
+        except Exception:
+            pass
+
+    async def add_title_tags(self, page):
+        await self._dismiss_studio_popups(page)
+
+        editor_locator = self.locator_base.locator("div.public-DraftEditor-content")
+        await editor_locator.wait_for(state="visible", timeout=20000)
+
+        try:
+            await editor_locator.focus(timeout=8000)
+        except Exception:
+            pass
+
+        try:
+            await editor_locator.click(timeout=8000)
+        except Exception:
+            tiktok_logger.info("  [-] Caption editor click intercepted; using force=True")
+            await editor_locator.click(force=True, timeout=15000)
 
         await page.keyboard.press("End")
 
@@ -254,20 +397,46 @@ class TiktokVideo(object):
         await page.locator('#creator-tools-selection-menu-header >> text=English (US)').click()
 
     async def click_publish(self, page):
-        success_flag_div = 'div.common-modal-confirm-modal'
-        while True:
+        last_err: Exception | None = None
+        for attempt in range(60):
             try:
-                publish_button = self.locator_base.locator('div.button-group button').nth(0)
-                if await publish_button.count():
-                    await publish_button.click()
+                await self._dismiss_studio_popups(page)
+                await self._dismiss_publish_blockers(page)
 
-                await page.wait_for_url("https://www.tiktok.com/tiktokstudio/content",  timeout=3000)
+                if attempt >= 12 and attempt % 6 == 0:
+                    await self._neutralize_open_tux_overlays(page)
+
+                candidates = [
+                    self.locator_base.locator('[data-e2e="post_video_button"]'),
+                    self.locator_base.get_by_role("button", name=re.compile(r"Post Now", re.I)),
+                    self.locator_base.locator("div.button-group button").filter(
+                        has_text=re.compile(r"Post", re.I)
+                    ),
+                    self.locator_base.locator("div.button-group button").first,
+                ]
+                clicked = False
+                for loc in candidates:
+                    if await loc.count():
+                        await loc.first.click(force=True, timeout=20000)
+                        clicked = True
+                        break
+                if not clicked:
+                    await asyncio.sleep(0.5)
+                    continue
+
+                await page.wait_for_url(
+                    "https://www.tiktok.com/tiktokstudio/content",
+                    timeout=10000,
+                )
                 tiktok_logger.success("  [-] video published success")
-                break
+                return
             except Exception as e:
-                tiktok_logger.exception(f"  [-] Exception: {e}")
-                tiktok_logger.info("  [-] video publishing")
+                last_err = e
+                if attempt % 5 == 0:
+                    tiktok_logger.info(f"  [-] video publishing (attempt {attempt + 1})")
                 await asyncio.sleep(0.5)
+
+        raise RuntimeError(f"TikTok publish failed after retries: {last_err}")
 
     async def get_last_video_id(self, page):
         await page.wait_for_selector('div[data-tt="components_PostTable_Container"]')

@@ -25,6 +25,10 @@ web = [
   "Flask[async]==3.1.1",
   "flask-cors==6.0.0",
 ]
+# TikTok Chrome uploader (`uploader/tk_uploader/main_chrome.py`) uses upstream Playwright, not patchright.
+tiktok = [
+  "playwright>=1.49.0",
+]
 
 [tool.uv]
 package = true

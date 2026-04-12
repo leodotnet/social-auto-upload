@@ -31,7 +31,7 @@
 | 快手 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 浏览器自动化，CLI/Skill 初版已接入 |
 | 视频号 | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | 对应 `tencent_uploader` |
 | 百家号 | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | 浏览器自动化 |
-| TikTok | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | 当前示例走 Chrome 版实现 |
+| TikTok | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ | Chrome 版 `tk_uploader`，CLI 已接入；无头/浏览器路径见 `conf.py` |
 
 ### AI这么强，为什么还需要这个项目
 在你使用AI的能力，browser agent等等，每次都让 agent 重新解析网页、截图理解, 临场判断
@@ -65,7 +65,7 @@ AI的发展毋庸置疑，希望你遇到这种安装和使用，不要再怯场
 
 - 优先按当前主线安装项目
 - 优先使用 `uv`、`sau` CLI 和 `skills/`
-- 先验证 `bilibili`、`douyin`、`kuaishou`、`xiaohongshu` 四个平台入口是否可用
+- 先验证 `bilibili`、`douyin`、`kuaishou`、`xiaohongshu`、`tiktok` 等平台入口是否可用
 
 
 ### 补充说明：
@@ -118,7 +118,7 @@ Web 端相关代码仍然保留，但已经不是当前主线，不保证可直�
 
 ### 方式 1：使用 CLI
 
-当前抖音、快手、小红书、Bilibili 已经接入 CLI：
+当前抖音、快手、小红书、Bilibili、TikTok 已经接入 CLI：
 
 ```bash
 sau douyin login --account <account_name>
@@ -139,6 +139,10 @@ sau xiaohongshu upload-note --account <account_name> --images videos/1.png video
 sau bilibili login --account <account_name>
 sau bilibili check --account <account_name>
 sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tid 249
+
+sau tiktok login --account <account_name>
+sau tiktok check --account <account_name>
+sau tiktok upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "可选补充文案" --tags tag1,tag2
 ```
 
 补充说明：
@@ -148,6 +152,7 @@ sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --titl
 - 浏览器平台统一约定：
 - 视频使用 `title + desc + tags`
 - 图文使用 `title + note + tags`
+- TikTok：账号文件为 `cookies/tiktok_<account_name>.json`；走 Chrome 通道，请在 `conf.py` 中配置 `LOCAL_CHROME_PATH`（本机 Chrome 可执行文件）及 `LOCAL_CHROME_HEADLESS`；上传命令支持 `--schedule` 定时、`--thumbnail` 封面；`--desc` 会与标题组合为正文（换行拼接）
 - Bilibili CLI 不要求用户手动安装 `biliup`
 - 首次运行相关命令时，程序会自动下载 `biliup`
 - 后续运行会自动检查上游 release 并更新
@@ -160,7 +165,7 @@ sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --titl
 - 当前主线 CLI 包装示例
 - 历史直连 uploader 示例
 
-对抖音、快手、小红书、Bilibili 来说，当前主线优先使用上面的 `sau ...` CLI。
+对抖音、快手、小红书、Bilibili、TikTok 来说，当前主线优先使用上面的 `sau ...` CLI。
 下面这些脚本主要是历史直连 uploader 示例或调试入口：
 
 - `examples/upload_to_douyin.py`

@@ -34,6 +34,7 @@ from uploader.xiaohongshu_uploader.main import (
     cookie_auth as xiaohongshu_cookie_auth,
     xiaohongshu_setup,
 )
+from utils.files_times import get_absolute_path
 
 SCHEDULE_FORMAT = "%Y-%m-%d %H:%M"
 
@@ -132,6 +133,17 @@ class BilibiliVideoUploadRequest:
     publish_date: datetime | int
 
 
+@dataclass(slots=True)
+class TiktokVideoUploadRequest:
+    account_name: str
+    video_file: Path
+    title: str
+    description: str
+    tags: list[str]
+    publish_date: datetime | int
+    thumbnail_file: Path | None = None
+
+
 def has_interactive_terminal() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
@@ -144,6 +156,29 @@ def resolve_account_file(platform: str, account_name: str) -> Path:
     account_file = resolve_runtime_home() / "cookies" / f"{platform}_{account_name}.json"
     account_file.parent.mkdir(exist_ok=True)
     return account_file
+
+
+def resolve_tiktok_storage_path(account_name: str) -> str:
+    """Path passed to TikTok Chrome uploader (same resolution as tiktok_setup)."""
+    return get_absolute_path(str(resolve_account_file("tiktok", account_name)), "tk_uploader")
+
+
+def _load_tiktok_chrome():
+    """Load TikTok Chrome uploader only when running tiktok subcommands (needs `playwright`)."""
+    try:
+        from uploader.tk_uploader.main_chrome import (  # noqa: PLC0415
+            TiktokVideo,
+            cookie_auth as tiktok_cookie_auth,
+            tiktok_setup,
+        )
+    except ModuleNotFoundError as exc:
+        missing = getattr(exc, "name", None) or ""
+        raise RuntimeError(
+            "TikTok 子命令依赖 Playwright 与本地 Chrome（见 conf.py 中 LOCAL_CHROME_PATH）。"
+            "请安装: pip install playwright && playwright install chromium"
+            + (f"（缺少模块: {missing}）" if missing else "")
+        ) from exc
+    return tiktok_setup, tiktok_cookie_auth, TiktokVideo
 
 
 def parse_tags(raw_tags: str | None) -> list[str]:
@@ -232,6 +267,22 @@ async def check_bilibili_account(account_name: str) -> bool:
         return False
     result = run_biliup_command(["-u", str(account_file), "renew"])
     return result.returncode == 0
+
+
+async def login_tiktok_account(account_name: str) -> None:
+    tiktok_setup, _, _ = _load_tiktok_chrome()
+    storage_path = resolve_tiktok_storage_path(account_name)
+    ok = await tiktok_setup(storage_path, handle=True)
+    if not ok:
+        raise RuntimeError(f"TikTok login did not complete: {storage_path}")
+
+
+async def check_tiktok_account(account_name: str) -> bool:
+    _, tiktok_cookie_auth, _ = _load_tiktok_chrome()
+    storage_path = resolve_tiktok_storage_path(account_name)
+    if not Path(storage_path).exists():
+        return False
+    return await tiktok_cookie_auth(storage_path)
 
 
 async def upload_video(request: DouyinVideoUploadRequest) -> Path:
@@ -376,6 +427,31 @@ async def upload_xiaohongshu_note(request: XiaohongshuNoteUploadRequest) -> Path
     )
     await app.main()
     return account_file
+
+
+async def upload_tiktok_video(request: TiktokVideoUploadRequest) -> Path:
+    tiktok_setup, _, TiktokVideo = _load_tiktok_chrome()
+    storage_path = resolve_tiktok_storage_path(request.account_name)
+    is_ready = await tiktok_setup(storage_path, handle=False)
+    if not is_ready:
+        raise RuntimeError(
+            f"TikTok cookie is missing or expired: {storage_path}. Run `sau tiktok login --account {request.account_name}` first."
+        )
+
+    caption = request.title
+    if request.description.strip():
+        caption = f"{request.title}\n{request.description}"
+
+    app = TiktokVideo(
+        caption,
+        str(request.video_file),
+        request.tags,
+        request.publish_date,
+        storage_path,
+        str(request.thumbnail_file) if request.thumbnail_file else None,
+    )
+    await app.main()
+    return resolve_account_file("tiktok", request.account_name)
 
 
 async def upload_bilibili_video(request: BilibiliVideoUploadRequest) -> Path:
@@ -525,6 +601,22 @@ def build_parser() -> argparse.ArgumentParser:
     xiaohongshu_upload_note_parser.add_argument("--tags", default="", help="Comma-separated tags, such as tag1,tag2")
     xiaohongshu_upload_note_parser.add_argument("--schedule", type=schedule_value, help=f"Schedule time in {schedule_help}")
     add_runtime_flags(xiaohongshu_upload_note_parser)
+
+    tiktok_parser = platform_parsers.add_parser("tiktok", help="TikTok operations (Chrome studio uploader)")
+    tiktok_actions = tiktok_parser.add_subparsers(dest="action", required=True)
+
+    for action_name in ("login", "check"):
+        action_parser = tiktok_actions.add_parser(action_name, help=f"TikTok {action_name}")
+        action_parser.add_argument("--account", required=True, help="TikTok user-defined account_name")
+
+    tiktok_upload_video_parser = tiktok_actions.add_parser("upload-video", help="Upload one video to TikTok")
+    tiktok_upload_video_parser.add_argument("--account", required=True, help="TikTok user-defined account_name")
+    tiktok_upload_video_parser.add_argument("--file", required=True, type=existing_file_path, help="Video file path")
+    tiktok_upload_video_parser.add_argument("--title", required=True, help="Video title / caption")
+    tiktok_upload_video_parser.add_argument("--desc", default="", help="Optional extra caption lines after title")
+    tiktok_upload_video_parser.add_argument("--tags", default="", help="Comma-separated tags (no #), such as tag1,tag2")
+    tiktok_upload_video_parser.add_argument("--schedule", type=schedule_value, help=f"Schedule time in {schedule_help}")
+    tiktok_upload_video_parser.add_argument("--thumbnail", type=existing_file_path, help="Optional cover image path")
 
     bilibili_parser = platform_parsers.add_parser("bilibili", help="Bilibili operations")
     bilibili_actions = bilibili_parser.add_subparsers(dest="action", required=True)
@@ -698,6 +790,33 @@ async def dispatch(args: argparse.Namespace) -> int:
             return 0
 
         raise RuntimeError(f"Unsupported Xiaohongshu action: {args.action}")
+
+    if args.platform == "tiktok":
+        if args.action == "login":
+            await login_tiktok_account(args.account)
+            print(f"TikTok login flow completed: {resolve_tiktok_storage_path(args.account)}")
+            return 0
+
+        if args.action == "check":
+            is_valid = await check_tiktok_account(args.account)
+            print("valid" if is_valid else "invalid")
+            return 0 if is_valid else 1
+
+        if args.action == "upload-video":
+            request = TiktokVideoUploadRequest(
+                account_name=args.account,
+                video_file=args.file,
+                title=args.title,
+                description=args.desc,
+                tags=parse_tags(args.tags),
+                publish_date=args.schedule or 0,
+                thumbnail_file=args.thumbnail,
+            )
+            await upload_tiktok_video(request)
+            print(f"TikTok video upload submitted: {request.video_file}")
+            return 0
+
+        raise RuntimeError(f"Unsupported TikTok action: {args.action}")
 
     if args.platform == "bilibili":
         if args.action == "login":
