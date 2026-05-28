@@ -9,34 +9,15 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 from conf import BASE_DIR
-from uploader.bilibili_uploader.runtime import run_biliup_command
-from uploader.douyin_uploader.main import (
-    DOUYIN_PUBLISH_STRATEGY_IMMEDIATE,
-    DOUYIN_PUBLISH_STRATEGY_SCHEDULED,
-    DouYinNote,
-    DouYinVideo,
-    cookie_auth as douyin_cookie_auth,
-    douyin_setup,
-)
-from uploader.ks_uploader.main import (
-    KUAISHOU_PUBLISH_STRATEGY_IMMEDIATE,
-    KUAISHOU_PUBLISH_STRATEGY_SCHEDULED,
-    KSNote,
-    KSVideo,
-    cookie_auth as kuaishou_cookie_auth,
-    ks_setup,
-)
-from uploader.xiaohongshu_uploader.main import (
-    XIAOHONGSHU_PUBLISH_STRATEGY_IMMEDIATE,
-    XIAOHONGSHU_PUBLISH_STRATEGY_SCHEDULED,
-    XiaoHongShuNote,
-    XiaoHongShuVideo,
-    cookie_auth as xiaohongshu_cookie_auth,
-    xiaohongshu_setup,
-)
 from utils.files_times import get_absolute_path
 
 SCHEDULE_FORMAT = "%Y-%m-%d %H:%M"
+DOUYIN_PUBLISH_STRATEGY_IMMEDIATE = "immediate"
+DOUYIN_PUBLISH_STRATEGY_SCHEDULED = "scheduled"
+KUAISHOU_PUBLISH_STRATEGY_IMMEDIATE = "immediate"
+KUAISHOU_PUBLISH_STRATEGY_SCHEDULED = "scheduled"
+XIAOHONGSHU_PUBLISH_STRATEGY_IMMEDIATE = "immediate"
+XIAOHONGSHU_PUBLISH_STRATEGY_SCHEDULED = "scheduled"
 
 
 @dataclass(slots=True)
@@ -144,6 +125,30 @@ class TiktokVideoUploadRequest:
     thumbnail_file: Path | None = None
 
 
+@dataclass(slots=True)
+class TencentVideoUploadRequest:
+    account_name: str
+    video_file: Path
+    title: str
+    description: str
+    tags: list[str]
+    publish_date: datetime | int
+    category: str | None = None
+    is_draft: bool = False
+
+
+@dataclass(slots=True)
+class YoutubeVideoUploadRequest:
+    account_name: str
+    video_file: Path
+    title: str
+    description: str
+    tags: list[str]
+    publish_date: datetime | int
+    thumbnail_file: Path | None = None
+    privacy: str = "PUBLIC"
+
+
 def has_interactive_terminal() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
@@ -181,6 +186,99 @@ def _load_tiktok_chrome():
     return tiktok_setup, tiktok_cookie_auth, TiktokVideo
 
 
+def _load_youtube():
+    """Load YouTube uploader only when running youtube subcommands (needs `playwright`)."""
+    try:
+        from uploader.youtube_uploader.main import (  # noqa: PLC0415
+            YoutubeVideo,
+            cookie_auth as youtube_cookie_auth,
+            youtube_setup,
+        )
+    except ModuleNotFoundError as exc:
+        missing = getattr(exc, "name", None) or ""
+        raise RuntimeError(
+            "YouTube 子命令依赖 Playwright 与本地 Chrome（见 conf.py 中 LOCAL_CHROME_PATH）。"
+            "请安装: pip install playwright && playwright install chromium"
+            + (f"（缺少模块: {missing}）" if missing else "")
+        ) from exc
+    return youtube_setup, youtube_cookie_auth, YoutubeVideo
+
+
+def _load_douyin():
+    from uploader.douyin_uploader.main import (
+        DOUYIN_PUBLISH_STRATEGY_IMMEDIATE as _IMMEDIATE,
+        DOUYIN_PUBLISH_STRATEGY_SCHEDULED as _SCHEDULED,
+        DouYinNote,
+        DouYinVideo,
+        cookie_auth as douyin_cookie_auth,
+        douyin_setup,
+    )
+    return {
+        "IMMEDIATE": _IMMEDIATE,
+        "SCHEDULED": _SCHEDULED,
+        "DouYinNote": DouYinNote,
+        "DouYinVideo": DouYinVideo,
+        "cookie_auth": douyin_cookie_auth,
+        "setup": douyin_setup,
+    }
+
+
+def _load_kuaishou():
+    from uploader.ks_uploader.main import (
+        KUAISHOU_PUBLISH_STRATEGY_IMMEDIATE as _IMMEDIATE,
+        KUAISHOU_PUBLISH_STRATEGY_SCHEDULED as _SCHEDULED,
+        KSNote,
+        KSVideo,
+        cookie_auth as kuaishou_cookie_auth,
+        ks_setup,
+    )
+    return {
+        "IMMEDIATE": _IMMEDIATE,
+        "SCHEDULED": _SCHEDULED,
+        "KSNote": KSNote,
+        "KSVideo": KSVideo,
+        "cookie_auth": kuaishou_cookie_auth,
+        "setup": ks_setup,
+    }
+
+
+def _load_xiaohongshu():
+    from uploader.xiaohongshu_uploader.main import (
+        XIAOHONGSHU_PUBLISH_STRATEGY_IMMEDIATE as _IMMEDIATE,
+        XIAOHONGSHU_PUBLISH_STRATEGY_SCHEDULED as _SCHEDULED,
+        XiaoHongShuNote,
+        XiaoHongShuVideo,
+        cookie_auth as xiaohongshu_cookie_auth,
+        xiaohongshu_setup,
+    )
+    return {
+        "IMMEDIATE": _IMMEDIATE,
+        "SCHEDULED": _SCHEDULED,
+        "XiaoHongShuNote": XiaoHongShuNote,
+        "XiaoHongShuVideo": XiaoHongShuVideo,
+        "cookie_auth": xiaohongshu_cookie_auth,
+        "setup": xiaohongshu_setup,
+    }
+
+
+def _load_tencent():
+    from uploader.tencent_uploader.main import (
+        TencentVideo,
+        cookie_auth as tencent_cookie_auth,
+        weixin_setup,
+    )
+    return {
+        "TencentVideo": TencentVideo,
+        "cookie_auth": tencent_cookie_auth,
+        "setup": weixin_setup,
+    }
+
+
+def _load_bilibili_runtime():
+    from uploader.bilibili_uploader.runtime import run_biliup_command
+    return run_biliup_command
+
+
 def parse_tags(raw_tags: str | None) -> list[str]:
     if not raw_tags:
         return []
@@ -204,42 +302,49 @@ def parse_schedule(raw_schedule: str | None) -> datetime | int:
 
 
 async def login_douyin_account(account_name: str, headless: bool = True) -> dict:
+    douyin = _load_douyin()
     account_file = resolve_account_file("douyin", account_name)
-    return await douyin_setup(str(account_file), handle=True, return_detail=True, headless=headless)
+    return await douyin["setup"](str(account_file), handle=True, return_detail=True, headless=headless)
 
 
 async def check_douyin_account(account_name: str) -> bool:
+    douyin = _load_douyin()
     account_file = resolve_account_file("douyin", account_name)
     if not account_file.exists():
         return False
-    return await douyin_cookie_auth(str(account_file))
+    return await douyin["cookie_auth"](str(account_file))
 
 
 async def login_kuaishou_account(account_name: str, headless: bool = True) -> dict:
+    kuaishou = _load_kuaishou()
     account_file = resolve_account_file("kuaishou", account_name)
-    return await ks_setup(str(account_file), handle=True, return_detail=True, headless=headless)
+    return await kuaishou["setup"](str(account_file), handle=True, return_detail=True, headless=headless)
 
 
 async def check_kuaishou_account(account_name: str) -> bool:
+    kuaishou = _load_kuaishou()
     account_file = resolve_account_file("kuaishou", account_name)
     if not account_file.exists():
         return False
-    return await kuaishou_cookie_auth(str(account_file))
+    return await kuaishou["cookie_auth"](str(account_file))
 
 
 async def login_xiaohongshu_account(account_name: str, headless: bool = True) -> dict:
+    xiaohongshu = _load_xiaohongshu()
     account_file = resolve_account_file("xiaohongshu", account_name)
-    return await xiaohongshu_setup(str(account_file), handle=True, return_detail=True, headless=headless)
+    return await xiaohongshu["setup"](str(account_file), handle=True, return_detail=True, headless=headless)
 
 
 async def check_xiaohongshu_account(account_name: str) -> bool:
+    xiaohongshu = _load_xiaohongshu()
     account_file = resolve_account_file("xiaohongshu", account_name)
     if not account_file.exists():
         return False
-    return await xiaohongshu_cookie_auth(str(account_file))
+    return await xiaohongshu["cookie_auth"](str(account_file))
 
 
 async def login_bilibili_account(account_name: str) -> dict:
+    run_biliup_command = _load_bilibili_runtime()
     account_file = resolve_account_file("bilibili", account_name)
     if not has_interactive_terminal():
         return {
@@ -262,6 +367,7 @@ async def login_bilibili_account(account_name: str) -> dict:
 
 
 async def check_bilibili_account(account_name: str) -> bool:
+    run_biliup_command = _load_bilibili_runtime()
     account_file = resolve_account_file("bilibili", account_name)
     if not account_file.exists():
         return False
@@ -269,10 +375,10 @@ async def check_bilibili_account(account_name: str) -> bool:
     return result.returncode == 0
 
 
-async def login_tiktok_account(account_name: str) -> None:
+async def login_tiktok_account(account_name: str, use_local_profile: bool = False) -> None:
     tiktok_setup, _, _ = _load_tiktok_chrome()
     storage_path = resolve_tiktok_storage_path(account_name)
-    ok = await tiktok_setup(storage_path, handle=True)
+    ok = await tiktok_setup(storage_path, handle=True, use_local_profile=use_local_profile)
     if not ok:
         raise RuntimeError(f"TikTok login did not complete: {storage_path}")
 
@@ -285,15 +391,80 @@ async def check_tiktok_account(account_name: str) -> bool:
     return await tiktok_cookie_auth(storage_path)
 
 
+async def login_youtube_account(
+    account_name: str,
+    use_local_profile: bool = False,
+    profile_directory: str | None = None,
+) -> None:
+    youtube_setup, _, _ = _load_youtube()
+    account_file = resolve_account_file("youtube", account_name)
+    ok = await youtube_setup(
+        str(account_file),
+        handle=True,
+        use_local_profile=use_local_profile,
+        profile_directory=profile_directory,
+    )
+    if not ok:
+        raise RuntimeError(f"YouTube login did not complete: {account_file}")
+
+
+async def check_youtube_account(account_name: str) -> bool:
+    _, youtube_cookie_auth, _ = _load_youtube()
+    account_file = resolve_account_file("youtube", account_name)
+    if not account_file.exists():
+        return False
+    return await youtube_cookie_auth(str(account_file))
+
+
+async def login_tencent_account(account_name: str) -> None:
+    tencent = _load_tencent()
+    account_file = resolve_account_file("tencent", account_name)
+    ok = await tencent["setup"](str(account_file), handle=True)
+    if not ok:
+        raise RuntimeError(f"Tencent/Weixin login did not complete: {account_file}")
+
+
+async def check_tencent_account(account_name: str) -> bool:
+    tencent = _load_tencent()
+    account_file = resolve_account_file("tencent", account_name)
+    if not account_file.exists():
+        return False
+    return await tencent["cookie_auth"](str(account_file))
+
+
+async def upload_tencent_video(request: TencentVideoUploadRequest) -> Path:
+    tencent = _load_tencent()
+    account_file = resolve_account_file("tencent", request.account_name)
+    is_ready = await tencent["setup"](str(account_file), handle=False)
+    if not is_ready:
+        raise RuntimeError(
+            f"Tencent/Weixin cookie is missing or expired: {account_file}. Run `sau tencent login --account {request.account_name}` first."
+        )
+
+    app = tencent["TencentVideo"](
+        title=request.title,
+        file_path=str(request.video_file),
+        tags=request.tags,
+        publish_date=request.publish_date,
+        account_file=str(account_file),
+        category=request.category,
+        is_draft=request.is_draft,
+        desc=request.description,
+    )
+    await app.main()
+    return account_file
+
+
 async def upload_video(request: DouyinVideoUploadRequest) -> Path:
+    douyin = _load_douyin()
     account_file = resolve_account_file("douyin", request.account_name)
-    is_ready = await douyin_setup(str(account_file), handle=False)
+    is_ready = await douyin["setup"](str(account_file), handle=False)
     if not is_ready:
         raise RuntimeError(
             f"Douyin cookie is missing or expired: {account_file}. Run `sau douyin login --account {request.account_name}` first."
         )
 
-    app = DouYinVideo(
+    app = douyin["DouYinVideo"](
         request.title,
         str(request.video_file),
         request.tags,
@@ -312,14 +483,15 @@ async def upload_video(request: DouyinVideoUploadRequest) -> Path:
 
 
 async def upload_note(request: DouyinNoteUploadRequest) -> Path:
+    douyin = _load_douyin()
     account_file = resolve_account_file("douyin", request.account_name)
-    is_ready = await douyin_setup(str(account_file), handle=False)
+    is_ready = await douyin["setup"](str(account_file), handle=False)
     if not is_ready:
         raise RuntimeError(
             f"Douyin cookie is missing or expired: {account_file}. Run `sau douyin login --account {request.account_name}` first."
         )
 
-    app = DouYinNote(
+    app = douyin["DouYinNote"](
         image_paths=[str(path) for path in request.image_files],
         title=request.title,
         note=request.note,
@@ -335,14 +507,15 @@ async def upload_note(request: DouyinNoteUploadRequest) -> Path:
 
 
 async def upload_kuaishou_video(request: KuaishouVideoUploadRequest) -> Path:
+    kuaishou = _load_kuaishou()
     account_file = resolve_account_file("kuaishou", request.account_name)
-    is_ready = await ks_setup(str(account_file), handle=False)
+    is_ready = await kuaishou["setup"](str(account_file), handle=False)
     if not is_ready:
         raise RuntimeError(
             f"Kuaishou cookie is missing or expired: {account_file}. Run `sau kuaishou login --account {request.account_name}` first."
         )
 
-    app = KSVideo(
+    app = kuaishou["KSVideo"](
         title=request.title,
         file_path=str(request.video_file),
         desc=request.description,
@@ -359,14 +532,15 @@ async def upload_kuaishou_video(request: KuaishouVideoUploadRequest) -> Path:
 
 
 async def upload_kuaishou_note(request: KuaishouNoteUploadRequest) -> Path:
+    kuaishou = _load_kuaishou()
     account_file = resolve_account_file("kuaishou", request.account_name)
-    is_ready = await ks_setup(str(account_file), handle=False)
+    is_ready = await kuaishou["setup"](str(account_file), handle=False)
     if not is_ready:
         raise RuntimeError(
             f"Kuaishou cookie is missing or expired: {account_file}. Run `sau kuaishou login --account {request.account_name}` first."
         )
 
-    app = KSNote(
+    app = kuaishou["KSNote"](
         image_paths=[str(path) for path in request.image_files],
         title=request.title,
         note=request.note,
@@ -382,14 +556,15 @@ async def upload_kuaishou_note(request: KuaishouNoteUploadRequest) -> Path:
 
 
 async def upload_xiaohongshu_video(request: XiaohongshuVideoUploadRequest) -> Path:
+    xiaohongshu = _load_xiaohongshu()
     account_file = resolve_account_file("xiaohongshu", request.account_name)
-    is_ready = await xiaohongshu_setup(str(account_file), handle=False)
+    is_ready = await xiaohongshu["setup"](str(account_file), handle=False)
     if not is_ready:
         raise RuntimeError(
             f"Xiaohongshu cookie is missing or expired: {account_file}. Run `sau xiaohongshu login --account {request.account_name}` first."
         )
 
-    app = XiaoHongShuVideo(
+    app = xiaohongshu["XiaoHongShuVideo"](
         title=request.title,
         file_path=str(request.video_file),
         desc=request.description,
@@ -406,14 +581,15 @@ async def upload_xiaohongshu_video(request: XiaohongshuVideoUploadRequest) -> Pa
 
 
 async def upload_xiaohongshu_note(request: XiaohongshuNoteUploadRequest) -> Path:
+    xiaohongshu = _load_xiaohongshu()
     account_file = resolve_account_file("xiaohongshu", request.account_name)
-    is_ready = await xiaohongshu_setup(str(account_file), handle=False)
+    is_ready = await xiaohongshu["setup"](str(account_file), handle=False)
     if not is_ready:
         raise RuntimeError(
             f"Xiaohongshu cookie is missing or expired: {account_file}. Run `sau xiaohongshu login --account {request.account_name}` first."
         )
 
-    app = XiaoHongShuNote(
+    app = xiaohongshu["XiaoHongShuNote"](
         image_paths=[str(path) for path in request.image_files],
         title=request.title,
         desc=request.note,
@@ -454,7 +630,31 @@ async def upload_tiktok_video(request: TiktokVideoUploadRequest) -> Path:
     return resolve_account_file("tiktok", request.account_name)
 
 
+async def upload_youtube_video(request: YoutubeVideoUploadRequest) -> Path:
+    youtube_setup, _, YoutubeVideo = _load_youtube()
+    account_file = resolve_account_file("youtube", request.account_name)
+    is_ready = await youtube_setup(str(account_file), handle=False)
+    if not is_ready:
+        raise RuntimeError(
+            f"YouTube cookie is missing or expired: {account_file}. Run `sau youtube login --account {request.account_name}` first."
+        )
+
+    app = YoutubeVideo(
+        title=request.title,
+        file_path=str(request.video_file),
+        tags=request.tags,
+        publish_date=request.publish_date,
+        account_file=str(account_file),
+        description=request.description,
+        thumbnail_path=str(request.thumbnail_file) if request.thumbnail_file else None,
+        privacy=request.privacy,
+    )
+    await app.main()
+    return account_file
+
+
 async def upload_bilibili_video(request: BilibiliVideoUploadRequest) -> Path:
+    run_biliup_command = _load_bilibili_runtime()
     account_file = resolve_account_file("bilibili", request.account_name)
     if not account_file.exists():
         raise RuntimeError(
@@ -608,6 +808,12 @@ def build_parser() -> argparse.ArgumentParser:
     for action_name in ("login", "check"):
         action_parser = tiktok_actions.add_parser(action_name, help=f"TikTok {action_name}")
         action_parser.add_argument("--account", required=True, help="TikTok user-defined account_name")
+        if action_name == "login":
+            action_parser.add_argument(
+                "--use-local-profile",
+                action="store_true",
+                help="Use local Chrome user profile for login (includes existing cookies/sessions)"
+            )
 
     tiktok_upload_video_parser = tiktok_actions.add_parser("upload-video", help="Upload one video to TikTok")
     tiktok_upload_video_parser.add_argument("--account", required=True, help="TikTok user-defined account_name")
@@ -617,6 +823,23 @@ def build_parser() -> argparse.ArgumentParser:
     tiktok_upload_video_parser.add_argument("--tags", default="", help="Comma-separated tags (no #), such as tag1,tag2")
     tiktok_upload_video_parser.add_argument("--schedule", type=schedule_value, help=f"Schedule time in {schedule_help}")
     tiktok_upload_video_parser.add_argument("--thumbnail", type=existing_file_path, help="Optional cover image path")
+
+    tencent_parser = platform_parsers.add_parser("tencent", help="Weixin Channels / 视频号 operations")
+    tencent_actions = tencent_parser.add_subparsers(dest="action", required=True)
+
+    for action_name in ("login", "check"):
+        action_parser = tencent_actions.add_parser(action_name, help=f"Tencent {action_name}")
+        action_parser.add_argument("--account", required=True, help="Tencent user-defined account_name")
+
+    tencent_upload_video_parser = tencent_actions.add_parser("upload-video", help="Upload one video to Weixin Channels")
+    tencent_upload_video_parser.add_argument("--account", required=True, help="Tencent user-defined account_name")
+    tencent_upload_video_parser.add_argument("--file", required=True, type=existing_file_path, help="Video file path")
+    tencent_upload_video_parser.add_argument("--title", required=True, help="Video title")
+    tencent_upload_video_parser.add_argument("--desc", default="", help="Optional video description / extra caption lines")
+    tencent_upload_video_parser.add_argument("--tags", default="", help="Comma-separated tags, such as tag1,tag2")
+    tencent_upload_video_parser.add_argument("--schedule", type=schedule_value, help=f"Schedule time in {schedule_help}")
+    tencent_upload_video_parser.add_argument("--category", default="", help="Optional original category")
+    tencent_upload_video_parser.add_argument("--draft", action="store_true", help="Save as draft instead of publish")
 
     bilibili_parser = platform_parsers.add_parser("bilibili", help="Bilibili operations")
     bilibili_actions = bilibili_parser.add_subparsers(dest="action", required=True)
@@ -633,6 +856,35 @@ def build_parser() -> argparse.ArgumentParser:
     bilibili_upload_video_parser.add_argument("--tid", required=True, type=int, help="Bilibili category id")
     bilibili_upload_video_parser.add_argument("--tags", default="", help="Comma-separated tags, such as tag1,tag2")
     bilibili_upload_video_parser.add_argument("--schedule", type=schedule_value, help=f"Schedule time in {schedule_help}")
+
+    youtube_parser = platform_parsers.add_parser("youtube", help="YouTube operations")
+    youtube_actions = youtube_parser.add_subparsers(dest="action", required=True)
+
+    for action_name in ("login", "check"):
+        action_parser = youtube_actions.add_parser(action_name, help=f"YouTube {action_name}")
+        action_parser.add_argument("--account", required=True, help="YouTube user-defined account_name")
+        if action_name == "login":
+            action_parser.add_argument(
+                "--use-local-profile",
+                action="store_true",
+                help="Use local Chrome user profile for login (includes existing cookies/sessions)"
+            )
+            action_parser.add_argument(
+                "--profile-directory",
+                default="",
+                help="Chrome profile directory name, e.g. Default, 'Profile 1', or custom name like H (requires --use-local-profile)",
+            )
+
+    youtube_upload_video_parser = youtube_actions.add_parser("upload-video", help="Upload one video to YouTube")
+    youtube_upload_video_parser.add_argument("--account", required=True, help="YouTube user-defined account_name")
+    youtube_upload_video_parser.add_argument("--file", required=True, type=existing_file_path, help="Video file path")
+    youtube_upload_video_parser.add_argument("--title", required=True, help="Video title")
+    youtube_upload_video_parser.add_argument("--desc", default="", help="Optional video description")
+    youtube_upload_video_parser.add_argument("--tags", default="", help="Comma-separated tags, such as tag1,tag2")
+    youtube_upload_video_parser.add_argument("--schedule", type=schedule_value, help=f"Schedule time in {schedule_help}")
+    youtube_upload_video_parser.add_argument("--thumbnail", type=existing_file_path, help="Optional thumbnail path")
+    youtube_upload_video_parser.add_argument("--privacy", choices=["PRIVATE", "UNLISTED", "PUBLIC"], default="PUBLIC", help="Video privacy level")
+
     return parser
 
 
@@ -793,7 +1045,8 @@ async def dispatch(args: argparse.Namespace) -> int:
 
     if args.platform == "tiktok":
         if args.action == "login":
-            await login_tiktok_account(args.account)
+            use_local_profile = getattr(args, "use_local_profile", False)
+            await login_tiktok_account(args.account, use_local_profile=use_local_profile)
             print(f"TikTok login flow completed: {resolve_tiktok_storage_path(args.account)}")
             return 0
 
@@ -817,6 +1070,68 @@ async def dispatch(args: argparse.Namespace) -> int:
             return 0
 
         raise RuntimeError(f"Unsupported TikTok action: {args.action}")
+
+    if args.platform == "youtube":
+        if args.action == "login":
+            use_local_profile = getattr(args, "use_local_profile", False)
+            profile_directory = (getattr(args, "profile_directory", "") or "").strip() or None
+            await login_youtube_account(
+                args.account,
+                use_local_profile=use_local_profile,
+                profile_directory=profile_directory,
+            )
+            print(f"YouTube login flow completed: {resolve_account_file('youtube', args.account)}")
+            return 0
+
+        if args.action == "check":
+            is_valid = await check_youtube_account(args.account)
+            print("valid" if is_valid else "invalid")
+            return 0 if is_valid else 1
+
+        if args.action == "upload-video":
+            request = YoutubeVideoUploadRequest(
+                account_name=args.account,
+                video_file=args.file,
+                title=args.title,
+                description=args.desc,
+                tags=parse_tags(args.tags),
+                publish_date=args.schedule or 0,
+                thumbnail_file=args.thumbnail,
+                privacy=args.privacy,
+            )
+            await upload_youtube_video(request)
+            print(f"YouTube video upload submitted: {request.video_file}")
+            return 0
+
+        raise RuntimeError(f"Unsupported YouTube action: {args.action}")
+
+    if args.platform == "tencent":
+        if args.action == "login":
+            await login_tencent_account(args.account)
+            print(f"Tencent login flow completed: {resolve_account_file('tencent', args.account)}")
+            return 0
+
+        if args.action == "check":
+            is_valid = await check_tencent_account(args.account)
+            print("valid" if is_valid else "invalid")
+            return 0 if is_valid else 1
+
+        if args.action == "upload-video":
+            request = TencentVideoUploadRequest(
+                account_name=args.account,
+                video_file=args.file,
+                title=args.title,
+                description=args.desc,
+                tags=parse_tags(args.tags),
+                publish_date=args.schedule or 0,
+                category=(args.category or None),
+                is_draft=args.draft,
+            )
+            await upload_tencent_video(request)
+            print(f"Tencent video upload submitted: {request.video_file}")
+            return 0
+
+        raise RuntimeError(f"Unsupported Tencent action: {args.action}")
 
     if args.platform == "bilibili":
         if args.action == "login":

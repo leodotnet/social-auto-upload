@@ -5,6 +5,8 @@
 - `douyin`
 - `kuaishou`
 - `xiaohongshu`
+- `tiktok`
+- `tencent`
 - `bilibili`
 
 实现说明：
@@ -78,6 +80,22 @@ sau bilibili check --account <account_name>
 sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tid 249 --tags 足球,测试
 ```
 
+## TikTok CLI 子命令
+
+```bash
+sau tiktok login --account <account_name>
+sau tiktok check --account <account_name>
+sau tiktok upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "可选补充文案" --tags tag1,tag2
+```
+
+## 视频号 / Tencent CLI 子命令
+
+```bash
+sau tencent login --account <account_name>
+sau tencent check --account <account_name>
+sau tencent upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "可选补充文案" --tags tag1,tag2 [--schedule] [--category] [--draft]
+```
+
 补充说明：
 
 - `creator` 之类的名字只是示例值，真正传的是用户自定义的 `account_name`
@@ -110,6 +128,8 @@ sau kuaishou upload-note --account <account_name> --images videos/1.png videos/2
 sau xiaohongshu upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --schedule "2026-03-24 21:30"
 sau xiaohongshu upload-note --account <account_name> --images videos/1.png videos/2.png videos/3.png --title "图文标题" --note "图文示例" --schedule "2026-03-24 21:30"
 sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tid 249 --schedule "2026-03-24 21:30"
+sau tiktok upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "可选补充文案" --schedule "2026-03-24 21:30"
+sau tencent upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "可选补充文案" --schedule "2026-03-24 21:30"
 ```
 
 ## 运行时参数
@@ -149,6 +169,16 @@ CLI 将 `debug` 和 `headless` 拆成了两个独立维度：
 --product-link https://example.com/item
 --product-title 示例商品
 ```
+
+Tencent/视频号补充：
+
+```bash
+--category "剧情"
+--draft
+```
+
+- 当前 `--desc` 会与 `--title` 组合后写入发布页主输入框，形式是“标题 + 换行 + 描述”
+- 目前代码层没有发现平台单独暴露的独立描述输入框，因此不是独立字段映射，而是发布主文案拼接
 
 Bilibili 额外要求：
 

@@ -17,11 +17,14 @@ _NAV_TIMEOUT_MS = 120_000
 # TikTok Studio 会持续请求，几乎等不到 networkidle；用 domcontentloaded + 短等待即可做登录态探测
 
 
-def _launch_chromium(playwright, *, headless: bool):
+def _launch_chromium(playwright, *, headless: bool, user_data_dir: str | None = None):
     path = (LOCAL_CHROME_PATH or "").strip()
+    kwargs = {"headless": headless}
     if path:
-        return playwright.chromium.launch(headless=headless, executable_path=path)
-    return playwright.chromium.launch(headless=headless)
+        kwargs["executable_path"] = path
+    if user_data_dir:
+        kwargs["args"] = [f"--user-data-dir={user_data_dir}"]
+    return playwright.chromium.launch(**kwargs)
 
 
 async def cookie_auth(account_file):
@@ -53,21 +56,37 @@ async def cookie_auth(account_file):
             await browser.close()
 
 
-async def tiktok_setup(account_file, handle=False):
+async def tiktok_setup(account_file, handle=False, use_local_profile: bool = False):
     account_file = get_absolute_path(account_file, "tk_uploader")
     if not os.path.exists(account_file) or not await cookie_auth(account_file):
         if not handle:
             return False
         tiktok_logger.info('[+] cookie file is not existed or expired. Now open the browser auto. Please login with your way(gmail phone, whatever, the cookie file will generated after login')
-        await get_tiktok_cookie(account_file)
+        await get_tiktok_cookie(account_file, use_local_profile=use_local_profile)
     return True
 
 
-async def get_tiktok_cookie(account_file):
+def _get_chrome_user_data_dir() -> str | None:
+    """Get the default Chrome user data directory for current OS."""
+    import platform
+    system = platform.system()
+    home = os.path.expanduser("~")
+    
+    if system == "Darwin":  # macOS
+        return os.path.join(home, "Library", "Application Support", "Google", "Chrome")
+    elif system == "Windows":
+        return os.path.join(home, "AppData", "Local", "Google", "Chrome", "User Data")
+    elif system == "Linux":
+        return os.path.join(home, ".config", "google-chrome")
+    return None
+
+
+async def get_tiktok_cookie(account_file, use_local_profile: bool = False):
     async with async_playwright() as playwright:
         browser = await _launch_chromium(
             playwright,
             headless=LOCAL_CHROME_HEADLESS,
+            user_data_dir=_get_chrome_user_data_dir() if use_local_profile else None,
         )
         try:
             context = await browser.new_context(

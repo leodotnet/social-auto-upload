@@ -48,6 +48,14 @@
 - [安装说明](./docs/install.md)
 - [更新说明](./docs/update.md)
 
+本地开发或运行 CLI 前，请先进入项目根目录并激活 Python 虚拟环境（仓库约定目录名为 `.venv`）：
+
+```bash
+source .venv/bin/activate
+```
+
+（Windows 可使用 `.venv\Scripts\activate`；创建虚拟环境与完整步骤见 [安装说明](./docs/install.md)。）
+
 
 ### AGENT 
 
@@ -116,9 +124,15 @@ Web 端相关代码仍然保留，但已经不是当前主线，不保证可直�
 
 ## 🏁快速开始
 
+以下命令均假设已在项目根目录激活虚拟环境：
+
+```bash
+source .venv/bin/activate
+```
+
 ### 方式 1：使用 CLI
 
-当前抖音、快手、小红书、Bilibili、TikTok 已经接入 CLI：
+当前抖音、快手、小红书、Bilibili、TikTok、Tencent/视频号 已经接入 CLI：
 
 ```bash
 sau douyin login --account <account_name>
@@ -143,6 +157,10 @@ sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --titl
 sau tiktok login --account <account_name>
 sau tiktok check --account <account_name>
 sau tiktok upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "可选补充文案" --tags tag1,tag2
+
+sau tencent login --account <account_name>
+sau tencent check --account <account_name>
+sau tencent upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "可选补充文案" --tags tag1,tag2
 ```
 
 补充说明：
@@ -153,6 +171,7 @@ sau tiktok upload-video --account <account_name> --file videos/demo.mp4 --title 
 - 视频使用 `title + desc + tags`
 - 图文使用 `title + note + tags`
 - TikTok：账号文件为 `cookies/tiktok_<account_name>.json`；走 Chrome 通道，请在 `conf.py` 中配置 `LOCAL_CHROME_PATH`（本机 Chrome 可执行文件）及 `LOCAL_CHROME_HEADLESS`；上传命令支持 `--schedule` 定时、`--thumbnail` 封面；`--desc` 会与标题组合为正文（换行拼接）
+- Tencent/视频号：账号文件为 `cookies/tencent_<account_name>.json`；上传命令支持 `--schedule`、`--category`、`--draft`；`--desc` 会与标题组合后写入发布页主输入框（换行拼接），平台仍没有单独暴露独立“描述”字段接口
 - Bilibili CLI 不要求用户手动安装 `biliup`
 - 首次运行相关命令时，程序会自动下载 `biliup`
 - 后续运行会自动检查上游 release 并更新

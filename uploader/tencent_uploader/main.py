@@ -82,7 +82,7 @@ async def weixin_setup(account_file, handle=False):
 
 
 class TencentVideo(object):
-    def __init__(self, title, file_path, tags, publish_date: datetime, account_file, category=None, is_draft=False):
+    def __init__(self, title, file_path, tags, publish_date: datetime, account_file, category=None, is_draft=False, desc=""):
         self.title = title  # 视频标题
         self.file_path = file_path
         self.tags = tags
@@ -92,6 +92,7 @@ class TencentVideo(object):
         self.headless = LOCAL_CHROME_HEADLESS
         self.is_draft = is_draft  # 是否保存为草稿
         self.local_executable_path = LOCAL_CHROME_PATH or None
+        self.desc = desc or ""
 
     async def set_schedule_time_tencent(self, page, publish_date):
         label_element = page.locator("label").filter(has_text="定时").nth(1)
@@ -242,7 +243,10 @@ class TencentVideo(object):
 
     async def add_title_tags(self, page):
         await page.locator("div.input-editor").click()
-        await page.keyboard.type(self.title)
+        body = self.title
+        if self.desc.strip():
+            body = f"{self.title}\n{self.desc.strip()}"
+        await page.keyboard.type(body)
         await page.keyboard.press("Enter")
         for index, tag in enumerate(self.tags, start=1):
             await page.keyboard.type("#" + tag)
